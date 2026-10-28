@@ -47,6 +47,8 @@ namespace OnlineMongoMigrationProcessor
                 set => _dict[jobId] = value;
             }
 
+            public bool ContainsValue(string value) => _dict.ContainsValue(value);
+
             public bool TryGetValue(string jobId, out string value)
             {
                 if (_dict.TryGetValue(jobId, out var v))

@@ -619,37 +619,43 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             if (options.StorageEngine != null)
                 indexDoc["storageEngine"] = options.StorageEngine;
 
+            // Amazon DocumentDB doesn't accept the Azure-specific "blocking" option, and a build cut short
+            // by maxTimeMS can't be assumed to continue in the background, so wait for the build there.
+            bool isAmazonDocDb = AmazonDocumentDbCompat.IsAmazonDocumentDbClient(targetClient);
             var command = new BsonDocument
             {
                 { "createIndexes", collectionName },
-                { "indexes", new BsonArray { indexDoc } },
-                { "blocking", blocking },
-                { "maxTimeMS", 5000 }
+                { "indexes", new BsonArray { indexDoc } }
             };
+            if (!isAmazonDocDb)
+            {
+                command["blocking"] = blocking;
+                command["maxTimeMS"] = 5000;
+            }
 
             try
             {
                 await targetDb.RunCommandAsync<BsonDocument>(command);
                 return true;
             }
-            catch (MongoCommandException ex) when (IsExpectedBlockingTimeout(ex))
+            catch (MongoCommandException ex) when (!isAmazonDocDb && IsExpectedBlockingTimeout(ex))
             {
                 // Timeout is expected; server-side index build continues and queues.
                 return true;
             }
-            catch (MongoExecutionTimeoutException ex) when (IsExpectedBlockingTimeout(ex))
+            catch (MongoExecutionTimeoutException ex) when (!isAmazonDocDb && IsExpectedBlockingTimeout(ex))
             {
                 // Timeout is expected; server-side index build continues and queues.
                 return true;
             }
-            catch (TimeoutException ex) when (IsExpectedBlockingTimeout(ex))
+            catch (TimeoutException ex) when (!isAmazonDocDb && IsExpectedBlockingTimeout(ex))
             {
                 // Timeout is expected; server-side index build continues and queues.
                 return true;
             }
             catch (Exception ex)
             {
-                if (IsExpectedBlockingTimeout(ex))
+                if (!isAmazonDocDb && IsExpectedBlockingTimeout(ex))
                     return true;
 
                 var indexName = options.Name ?? "unnamed";

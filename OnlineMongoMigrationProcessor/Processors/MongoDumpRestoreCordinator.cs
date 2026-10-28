@@ -2450,11 +2450,17 @@ namespace OnlineMongoMigrationProcessor
             string targetCollectionName)
         {
             MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.BuildRestoreArguments: source={sourceDatabaseName}.{sourceCollectionName}, target={targetDatabaseName}.{targetCollectionName}, chunkIndex={chunkIndex}");
-            // Strip a missing CA file path from the target connection string so mongorestore doesn't fail
-            // trying to load it (no target CA upload exists, so there's nothing to materialize). Also
-            // translate insecure TLS URI options into explicit CLI flags the tools honor reliably.
-            var targetToolConn = Helper.NormalizeConnectionStringForMongoTools(targetConnectionString, null);
+            // Point mongorestore at the target CA uploaded in Settings (e.g. Amazon DocumentDB global-bundle.pem)
+            // when the URI's CA file is missing or absent. Also translate insecure TLS URI options into explicit
+            // CLI flags the tools honor reliably.
+            bool targetIsAmazonDocDb = AmazonDocumentDbCompat.ShouldTreatAsAmazonDocumentDb(targetConnectionString);
+            var targetToolConn = Helper.NormalizeConnectionStringForMongoTools(targetConnectionString, AmazonDocumentDbCompat.TargetCaCertContents);
             targetConnectionString = targetToolConn.ConnectionString;
+            if (targetIsAmazonDocDb)
+            {
+                // Amazon DocumentDB supports retryable writes only from engine 8.0.2.
+                targetConnectionString = AmazonDocumentDbCompat.EnsureRetryWritesSetting(targetConnectionString);
+            }
             // Always --noIndexRestore: collection + indexes are pre-created upfront so mongorestore stays a pure data path; lets every chunk run in parallel without index-build contention on the target.
             string args = $" --uri={QuoteMongoToolArgument(targetConnectionString)} --gzip --archive --noIndexRestore{targetToolConn.ExtraToolArguments}";
             args = $"{args} --nsFrom={QuoteMongoToolArgument($"{sourceDatabaseName}.{sourceCollectionName}")} --nsTo={QuoteMongoToolArgument($"{targetDatabaseName}.{targetCollectionName}")}";

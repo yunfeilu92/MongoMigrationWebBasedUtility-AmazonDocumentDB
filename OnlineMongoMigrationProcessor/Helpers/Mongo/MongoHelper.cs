@@ -1437,6 +1437,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         public static async Task<bool> ShardCollectionAsync(Log log, MongoClient targetClient, string databaseName, string collectionName, BsonDocument sourceShardKey)
         {
             var ns = $"{databaseName}.{collectionName}";
+            if (AmazonDocumentDbCompat.IsAmazonDocumentDbClient(targetClient) && !AmazonDocumentDbCompat.IsElasticClusterClient(targetClient))
+            {
+                log.WriteLine($"Skipping shardCollection for {ns}: Amazon DocumentDB instance-based clusters don't support sharding.", LogType.Warning);
+                return false;
+            }
             try
             {
                 // Convert to hashed shard key (Cosmos DB only supports hashed)
@@ -1514,6 +1519,10 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         public static async Task<(bool Ok, string? Error)> MoveCollectionAsync(Log log, MongoClient targetClient, string databaseName, string collectionName, string toShard)
         {
             var ns = $"{databaseName}.{collectionName}";
+            if (AmazonDocumentDbCompat.IsAmazonDocumentDbClient(targetClient))
+            {
+                return (false, "moveCollection isn't supported on Amazon DocumentDB");
+            }
             try
             {
                 log.WriteLine($"Moving collection {ns} to shard: {toShard}");

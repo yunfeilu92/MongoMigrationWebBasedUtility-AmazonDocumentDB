@@ -105,6 +105,24 @@
                             </button>
                         }
                     </div>
+
+                    <div class="mb-3">
+                        <label for="target-pem-text" class="form-label" title="Amazon DocumentDB: upload global-bundle.pem from https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem">CA certificate file for target server (.pem), e.g. Amazon DocumentDB global-bundle.pem</label>
+                        <InputFile OnChange="OnTargetPemFileUpload" />
+
+                        @if (!string.IsNullOrWhiteSpace(_configurationBackup.CACertContentsForTargetServer))
+                        {
+                            <button class="btn btn-outline-danger btn-sm mt-2" @onclick="ClearTargetPem">
+                                Delete Saved Target Certificate
+                            </button>
+                        }
+                    </div>
+                    <div class="mb-3">
+                        <label for="treat-target-as-docdb" class="form-label" title="Amazon DocumentDB endpoints (*.docdb.amazonaws.com) are detected automatically. Enable this when you reach the cluster through an SSH tunnel or a custom DNS name.">
+                            <input type="checkbox" id="treat-target-as-docdb" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).TreatTargetAsAmazonDocumentDB" />
+                            Target is Amazon DocumentDB (host name not *.docdb.amazonaws.com)
+                        </label>
+                    </div>
                 </div>
 
                 <!-- Change Stream Tab Content -->
@@ -242,6 +260,18 @@
         var file = e.File;
         using var reader = new StreamReader(file.OpenReadStream(maxAllowedSize: 1024 * 1024));
         (_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).CACertContentsForSourceServer = await reader.ReadToEndAsync();
+    }
+
+    private void ClearTargetPem()
+    {
+        (_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).CACertContentsForTargetServer = string.Empty;
+    }
+
+    private async Task OnTargetPemFileUpload(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        using var reader = new StreamReader(file.OpenReadStream(maxAllowedSize: 1024 * 1024));
+        (_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).CACertContentsForTargetServer = await reader.ReadToEndAsync();
     }
 
 

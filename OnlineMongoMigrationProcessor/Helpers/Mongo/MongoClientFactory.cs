@@ -1,14 +1,11 @@
-﻿using MongoDB.Driver;
+using MongoDB.Driver;
 using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
-using System.Net.Security;
-using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography;
-using System.Threading.Tasks;
+using System.Text;
 using System.Web;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 {
@@ -23,18 +20,51 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             
             var cleanConnStr = RemovePemPathFromConnectionString(connectionString);
 
-            string cacheKey = $"{cleanConnStr}|{ReadConcernMajority}|{!string.IsNullOrWhiteSpace(PEMFileContents)}";
+            // Amazon DocumentDB target support: target connections (and any Amazon DocumentDB endpoint)
+            // use the target CA bundle from Settings, or the file referenced by tlsCAFile, because the
+            // .NET driver ignores tlsCAFile in the connection string.
+            bool isTarget = AmazonDocumentDbCompat.IsTargetConnectionString(connectionString);
+            bool isAmazonDocDb = AmazonDocumentDbCompat.ShouldTreatAsAmazonDocumentDb(connectionString);
+            bool usesTargetCa = false;
+            string? pem = PEMFileContents;
+            if (string.IsNullOrWhiteSpace(pem) && (isTarget || isAmazonDocDb))
+            {
+                pem = AmazonDocumentDbCompat.TargetCaCertContents;
+                if (string.IsNullOrWhiteSpace(pem))
+                    pem = ReadCaFileFromConnectionString(log, cleanConnStr);
+                usesTargetCa = !string.IsNullOrWhiteSpace(pem);
+            }
+
+            bool allowInvalidHostnames = AmazonDocumentDbCompat.IsUriOptionTrue(cleanConnStr, "tlsAllowInvalidHostnames");
+            bool allowInvalidCertificates = AmazonDocumentDbCompat.IsUriOptionTrue(cleanConnStr, "tlsAllowInvalidCertificates");
+            if (!string.IsNullOrWhiteSpace(pem))
+            {
+                // Handled by the CA bundle validator instead of the driver.
+                cleanConnStr = AmazonDocumentDbCompat.RemoveUriOptions(cleanConnStr, "tlsCAFile", "tlsAllowInvalidHostnames", "tlsAllowInvalidCertificates");
+            }
+
+            string pemKey = string.IsNullOrWhiteSpace(pem) ? "none" : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(pem)));
+            string cacheKey = $"{cleanConnStr}|{ReadConcernMajority}|{pemKey}|{usesTargetCa}|{isAmazonDocDb}";
 
             return _clientCache.GetOrAdd(cacheKey, _ =>
             {
                 var settings = MongoClientSettings.FromUrl(new MongoUrl(cleanConnStr));
 
-                if (!string.IsNullOrWhiteSpace(PEMFileContents))
+                if (!string.IsNullOrWhiteSpace(pem))
                 {
+                    // Only CAs from the bundle are trusted. The target CA also enforces the host name;
+                    // a source CA keeps the upstream behavior of not checking it (e.g. connecting by IP).
                     settings.SslSettings = new SslSettings
                     {
-                        ServerCertificateValidationCallback = ValidateAmazonDocDbCertificate(log, PEMFileContents!)
+                        ServerCertificateValidationCallback = AmazonDocumentDbCompat.CreateCaBundleValidator(
+                            log, pem!, enforceHostName: usesTargetCa && !allowInvalidHostnames, allowInvalidCertificates)
                     };
+                }
+
+                if (isAmazonDocDb && !AmazonDocumentDbCompat.HasUriOption(cleanConnStr, "retryWrites"))
+                {
+                    // Amazon DocumentDB supports retryable writes only from engine 8.0.2.
+                    settings.RetryWrites = false;
                 }
 
                 if (ReadConcernMajority)
@@ -42,8 +72,25 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                     settings.ReadConcern = ReadConcern.Majority;
                 }
 
-                return new MongoClient(settings);
+                var client = new MongoClient(settings);
+                if (isAmazonDocDb)
+                {
+                    AmazonDocumentDbCompat.MarkClient(client);
+                }
+                return client;
             });
+        }
+
+        private static string? ReadCaFileFromConnectionString(Log? log, string connectionString)
+        {
+            var caFile = AmazonDocumentDbCompat.GetUriOptionValue(connectionString, "tlsCAFile");
+            if (string.IsNullOrWhiteSpace(caFile)) return null;
+            if (!File.Exists(caFile))
+            {
+                log?.WriteLine($"tlsCAFile '{caFile}' doesn't exist on this host; upload the target CA certificate in Settings instead.", LogType.Warning);
+                return null;
+            }
+            return File.ReadAllText(caFile);
         }
 
         private static string RemovePemPathFromConnectionString(string connStr)
@@ -72,76 +119,6 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
 
             return string.IsNullOrWhiteSpace(newQuery) ? baseConnStr : $"{baseConnStr}?{newQuery}";
-        }
-
-        private static RemoteCertificateValidationCallback ValidateAmazonDocDbCertificate(Log? log,string pem)
-        {
-            return (sender, certificate, chain, sslPolicyErrors) =>
-            {
-                try
-                {
-                    var caCerts = new X509Certificate2Collection();
-
-                    var certs = SplitPemCertificates(pem);
-
-                    foreach (var certText in certs)
-                    {
-                        var raw = Convert.FromBase64String(certText);
-                        #pragma warning disable SYSLIB0057
-                        var cert = new X509Certificate2(raw);
-                        #pragma warning restore SYSLIB0057
-                        caCerts.Add(cert);
-                    }
-
-                    if (chain == null || certificate == null)
-                        return false;
-
-                    chain.ChainPolicy.ExtraStore.AddRange(caCerts);
-                    chain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
-                    chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-
-                    var isValid = chain.Build((X509Certificate2)certificate);
-
-                    if (!isValid)
-                    {
-                        Console.WriteLine("Certificate chain build failed.");
-                    }
-
-                    return isValid;
-                }
-                catch (Exception ex)
-                {
-                    log?.WriteLine($"Certificate validation failed: { ex}", LogType.Error);
-                    
-                    return false;
-                }
-            };
-        }
-
-        private static string[] SplitPemCertificates(string pemContent)
-        {
-            const string header = "-----BEGIN CERTIFICATE-----";
-            const string footer = "-----END CERTIFICATE-----";
-
-            var certs = new List<string>();
-            int start = 0;
-
-            while ((start = pemContent.IndexOf(header, start)) != -1)
-            {
-                int end = pemContent.IndexOf(footer, start);
-                if (end == -1) break;
-
-                int certStart = start + header.Length;
-                string base64 = pemContent.Substring(certStart, end - certStart)
-                    .Replace("\n", "")
-                    .Replace("\r", "")
-                    .Trim();
-
-                certs.Add(base64);
-                start = end + footer.Length;
-            }
-
-            return certs.ToArray();
         }
     }
 }

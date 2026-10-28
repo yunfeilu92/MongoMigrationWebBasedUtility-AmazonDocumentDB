@@ -549,6 +549,46 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <summary>
         /// Process inserts with retry logic
         /// </summary>
+        /// <summary>
+        /// A duplicate key on insert is normally a harmless replay. It is a data-loss risk when the source
+        /// enforces _id uniqueness per shard key only (Cosmos DB for MongoDB RU, sharded MongoDB) and the
+        /// target holds a different document with the same _id. Such collisions are logged as errors and
+        /// counted as failures instead of being silently skipped.
+        /// </summary>
+        private async Task ReportShardKeyCollisionsAsync(
+            IMongoCollection<BsonDocument> collection,
+            List<ChangeStreamDocument<BsonDocument>> inserts,
+            List<BulkWriteError> duplicateKeyErrors,
+            WriteResult result)
+        {
+            foreach (var error in duplicateKeyErrors)
+            {
+                if (error.Index < 0 || error.Index >= inserts.Count) continue;
+                var documentKey = inserts[error.Index].DocumentKey;
+                // A documentKey with only _id can't carry a shard key, so the duplicate is a replay.
+                if (documentKey == null || documentKey.ElementCount <= 1 || !documentKey.Contains("_id")) continue;
+                try
+                {
+                    var existing = await collection.Find(new BsonDocument("_id", documentKey["_id"])).FirstOrDefaultAsync();
+                    if (existing == null)
+                    {
+                        _log.WriteLine($"{_logPrefix}Duplicate key on a unique index other than _id in {collection.CollectionNamespace.FullName}: {documentKey.ToJson()} was not written ({error.Message}).", LogType.Warning);
+                        continue;
+                    }
+                    var mismatch = AmazonDocumentDbCompat.FindShardKeyMismatch(documentKey, existing);
+                    if (mismatch == null) continue;
+
+                    result.Failures++;
+                    result.FailedDocumentKeys.Add(documentKey.ToJson());
+                    _log.WriteLine($"{_logPrefix}_id collision in {collection.CollectionNamespace.FullName}: source document {documentKey.ToJson()} has the same _id as a different target document ({mismatch}). The source enforces _id uniqueness per shard key only; this document was NOT written.", LogType.Error);
+                }
+                catch (Exception checkEx)
+                {
+                    _log.WriteLine($"{_logPrefix}Couldn't check duplicate key {documentKey.ToJson()} in {collection.CollectionNamespace.FullName} for an _id collision: {checkEx.Message}", LogType.Warning);
+                }
+            }
+        }
+
         internal async Task<WriteResult> ProcessInsertsWithRetryAsync<TMigration>(
          TMigration unit,
          IMongoCollection<BsonDocument> collection,
@@ -670,6 +710,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                             var duplicateKeyErrors = ex.WriteErrors.Where(err => err.Code == 11000).ToList();
                             result.Skipped += duplicateKeyErrors.Count;
                             counterDelegate(unit, CounterType.Skipped, ChangeStreamOperationType.Insert, duplicateKeyErrors.Count);
+                            await ReportShardKeyCollisionsAsync(collection, deduplicatedInserts, duplicateKeyErrors, result);
 
                             var otherErrors = ex.WriteErrors.Where(err => err.Code != 11000).ToList();
                             if (otherErrors.Any())

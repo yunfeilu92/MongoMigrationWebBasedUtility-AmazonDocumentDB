@@ -305,12 +305,14 @@ namespace OnlineMongoMigrationProcessor.Processors
                 if (accumulatedChangesInColl.Count>0)
                 {
                     _log.ShowInMonitor($"Processing partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}], processed {counter}.");
+                    // Write first, then save the token: the token points past these changes, so saving it
+                    // before the write would skip them if the process stopped in between.
+                    await BulkProcessChangesAsync(chunk, targetCollection, accumulatedChangesInColl);
                     if (resumeToken != null)
                     {
                         chunk.RUPartitionResumeToken = resumeToken.ToJson();
                         MigrationJobContext.SaveMigrationUnit(mu,false);
                     }
-                    await BulkProcessChangesAsync(chunk, targetCollection, accumulatedChangesInColl);
                 }
             }
             catch (OperationCanceledException) when (!timeoutCts.IsCancellationRequested && manualToken.IsCancellationRequested)

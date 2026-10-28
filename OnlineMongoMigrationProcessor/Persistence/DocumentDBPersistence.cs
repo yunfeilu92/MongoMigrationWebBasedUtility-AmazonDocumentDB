@@ -106,7 +106,9 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 try
                 {
                     Helper.LogToFile($"Creating MongoClient, elapsed: {sw.ElapsedMilliseconds}ms");
-                    _client = new MongoClient(resolvedConnectionString);
+                    // Through the factory so an Amazon DocumentDB state store can use tlsCAFile
+                    // (the .NET driver ignores tlsCAFile in the connection string).
+                    _client = Helpers.Mongo.MongoClientFactory.Create(null, resolvedConnectionString);
                     Helper.LogToFile($"MongoClient created, elapsed: {sw.ElapsedMilliseconds}ms");
                     
                     Helper.LogToFile($"Getting database {DATABASE_NAME}, elapsed: {sw.ElapsedMilliseconds}ms");

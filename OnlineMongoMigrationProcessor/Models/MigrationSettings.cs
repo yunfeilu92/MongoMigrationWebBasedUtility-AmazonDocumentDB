@@ -10,6 +10,10 @@ namespace OnlineMongoMigrationProcessor
     {
       
         public string? CACertContentsForSourceServer { get; set; }
+        // Amazon DocumentDB target support: CA bundle for the target (e.g. RDS global-bundle.pem).
+        public string? CACertContentsForTargetServer { get; set; }
+        // Treat the target as Amazon DocumentDB when the host name doesn't show it (SSH tunnel, custom DNS).
+        public bool TreatTargetAsAmazonDocumentDB { get; set; }
         public string? MongoToolsDownloadUrl { get; set; }
         public string? MongoDumpToolPath { get; set; }
         public string? MongoRestoreToolPath { get; set; }
@@ -81,6 +85,8 @@ namespace OnlineMongoMigrationProcessor
                     CompareSampleSize = loadedObject.CompareSampleSize == 0 ? 50 : loadedObject.CompareSampleSize;
                     LogPageSize = loadedObject.LogPageSize == 0 ? 5000 : loadedObject.LogPageSize;
                     CACertContentsForSourceServer = loadedObject.CACertContentsForSourceServer;
+                    CACertContentsForTargetServer = loadedObject.CACertContentsForTargetServer;
+                    TreatTargetAsAmazonDocumentDB = loadedObject.TreatTargetAsAmazonDocumentDB;
                     ObjectIdPartitioner = loadedObject.ObjectIdPartitioner;
                     NonObjectIdPartitioner = loadedObject.NonObjectIdPartitioner;
                     LargePartitionsShouldBeSplit = hasLargePartitionsShouldBeSplit ? loadedObject.LargePartitionsShouldBeSplit : true;
@@ -113,6 +119,8 @@ namespace OnlineMongoMigrationProcessor
                 ChangeStreamBatchDurationMin = 30;
                 ChangeStreamMaxCollsInBatch = 5;
                 CACertContentsForSourceServer = string.Empty;
+                CACertContentsForTargetServer = string.Empty;
+                TreatTargetAsAmazonDocumentDB = false;
                 CompareSampleSize = 50;
                 LogPageSize = 5000;
                 ObjectIdPartitioner = PartitionerType.UseSampleCommand;
@@ -125,6 +133,7 @@ namespace OnlineMongoMigrationProcessor
                 OptimizeForLargeDocs = false;
                 PartitionFactor = 100;
             }
+            Helpers.Mongo.AmazonDocumentDbCompat.ApplySettings(this);
         }
 
         public bool Save(out string errorMessage)
@@ -133,6 +142,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 string json = JsonConvert.SerializeObject(this);
                 MigrationJobContext.Store.UpsertDocument(_filePath, json);
+                Helpers.Mongo.AmazonDocumentDbCompat.ApplySettings(this);
 
                 //File.WriteAllText(_filePath, json);
                 errorMessage=string.Empty;

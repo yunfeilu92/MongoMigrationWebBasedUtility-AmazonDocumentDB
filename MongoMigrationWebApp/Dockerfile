@@ -87,6 +87,15 @@ RUN set -eux; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/* /tmp/mongodump-tools.tgz /tmp/mongorestore-tools.tgz
 
+# Amazon DocumentDB CA bundle, so connection strings can use tlsCAFile=/app/certs/global-bundle.pem
+ARG INSTALL_RDS_CA_BUNDLE=true
+RUN if [ "$INSTALL_RDS_CA_BUNDLE" = "true" ]; then \
+        mkdir -p /app/certs && \
+        wget -qO /app/certs/global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem && \
+        grep -q "BEGIN CERTIFICATE" /app/certs/global-bundle.pem && \
+        chmod 644 /app/certs/global-bundle.pem; \
+    fi
+
 # Create the migration data directory structure that the app expects
 # The app looks for ResourceDrive/home/ directory structure
 RUN mkdir -p /app/migration-data/home && \

@@ -267,6 +267,13 @@ namespace OnlineMongoMigrationProcessor
                 }
                 modified = true;
             }
+            else if (caPair.Key == null && !string.IsNullOrWhiteSpace(caCertContents) && IsTlsEnabled(baseConnStr, pairs))
+            {
+                // A CA was uploaded but the URI has no CA option (e.g. Amazon DocumentDB target):
+                // give the tools a materialized copy of the uploaded bundle.
+                pairs.Add(("tlsCAFile", MaterializeMongoToolCaFile(caCertContents!)));
+                modified = true;
+            }
 
             // --- Insecure TLS option handling (translate URI option -> CLI flag) ---
             var flags = new List<string>();
@@ -292,6 +299,11 @@ namespace OnlineMongoMigrationProcessor
 
             return result;
         }
+
+        private static bool IsTlsEnabled(string baseConnStr, List<(string Key, string Value)> pairs) =>
+            baseConnStr.StartsWith("mongodb+srv://", StringComparison.OrdinalIgnoreCase)
+            || pairs.Any(p => (string.Equals(p.Key, "tls", StringComparison.OrdinalIgnoreCase) || string.Equals(p.Key, "ssl", StringComparison.OrdinalIgnoreCase))
+                && string.Equals(p.Value?.Trim(), "true", StringComparison.OrdinalIgnoreCase));
 
         // Writes the CA cert contents to a stable file named by content hash so repeated calls (one per
         // dump chunk) reuse the same file instead of littering the working folder with temp files.
