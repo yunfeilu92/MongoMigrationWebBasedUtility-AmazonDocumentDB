@@ -1,3 +1,5 @@
+> **Fork note:** this fork adds **Amazon DocumentDB** as a migration target, for example online migrations from Azure Cosmos DB for MongoDB (RU) to Amazon DocumentDB. See [AMAZON_DOCUMENTDB.md](AMAZON_DOCUMENTDB.md). It's a community fork, not affiliated with Microsoft or AWS.
+
 # Migration Tool for Azure DocumentDB
 
 Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use web app. Choose your migration tool and migration mode (offline, online, or sync only). The app orchestrates bulk copy and, for online jobs, change‑stream catch‑up. You don’t need to learn or use these command-line tools yourself.

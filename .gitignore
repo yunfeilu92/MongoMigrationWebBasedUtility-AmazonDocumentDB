@@ -19,3 +19,6 @@
 /MongoMigrationWebApp/Properties/PublishProfiles
 /SchemaMigration/__pycache__
 /OnlineMongoMigrationProcessor/Helpers/Mongo
+/OnlineMongoMigrationProcessor.Tests/bin
+/OnlineMongoMigrationProcessor.Tests/obj
+/OnlineMongoMigrationProcessor.Tests/TestResults
